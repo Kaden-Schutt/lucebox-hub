@@ -9,29 +9,62 @@
 
 #include <hip/hip_runtime.h>
 
+// ── Error / status ──────────────────────────────────────────────────────────
+#define cudaError_t hipError_t
+#define cudaSuccess hipSuccess
+#define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
+#define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
+#define cudaGetErrorString hipGetErrorString
+#define cudaGetLastError hipGetLastError
+
+// ── Device management ───────────────────────────────────────────────────────
 #define cudaDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
 #define cudaDeviceSynchronize hipDeviceSynchronize
-#define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
-#define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
-#define cudaError_t hipError_t
-#define cudaFree hipFree
+#define cudaGetDevice hipGetDevice
 #define cudaGetDeviceCount hipGetDeviceCount
-#define cudaGetErrorString hipGetErrorString
-#define cudaGetLastError hipGetLastError
+#define cudaSetDevice hipSetDevice
+
+// ── Memory allocation ───────────────────────────────────────────────────────
+#define cudaFree hipFree
 #define cudaMalloc hipMalloc
-#define cudaMemcpy2DAsync hipMemcpy2DAsync
+
+// ── Memcpy / memset ─────────────────────────────────────────────────────────
+#define cudaMemcpy hipMemcpy
 #define cudaMemcpyAsync hipMemcpyAsync
+#define cudaMemcpy2DAsync hipMemcpy2DAsync
+#define cudaMemcpyPeerAsync hipMemcpyPeerAsync
 #define cudaMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 #define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define cudaMemcpyHostToDevice hipMemcpyHostToDevice
 #define cudaMemcpyKind hipMemcpyKind
-#define cudaMemcpyPeerAsync hipMemcpyPeerAsync
 #define cudaMemset hipMemset
-#define cudaSetDevice hipSetDevice
-#define cudaStreamSynchronize hipStreamSynchronize
+
+// ── Streams ─────────────────────────────────────────────────────────────────
 #define cudaStream_t hipStream_t
-#define cudaSuccess hipSuccess
+#define cudaStreamCreate hipStreamCreate
+#define cudaStreamDestroy hipStreamDestroy
+#define cudaStreamSynchronize hipStreamSynchronize
+#define cudaStreamWaitEvent hipStreamWaitEvent
+
+// ── Events ──────────────────────────────────────────────────────────────────
+#define cudaEvent_t hipEvent_t
+#define cudaEventCreate hipEventCreate
+#define cudaEventDestroy hipEventDestroy
+#define cudaEventRecord hipEventRecord
+#define cudaEventSynchronize hipEventSynchronize
+#define cudaEventElapsedTime hipEventElapsedTime
+#define cudaEventQuery hipEventQuery
+
+// ── Kernel attribute control ────────────────────────────────────────────────
+#define cudaFuncSetAttribute hipFuncSetAttribute
+
+// ── Cross-vendor builtins ───────────────────────────────────────────────────
+// HIP has __ballot(predicate) but no masked __ballot_sync(mask, predicate).
+// Inference code always uses full-wave mask 0xffffffff, so we drop the mask.
+#ifndef __ballot_sync
+#define __ballot_sync(mask, predicate) __ballot(predicate)
+#endif
 
 #else
 

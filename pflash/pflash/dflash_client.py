@@ -23,7 +23,7 @@ class DflashClient:
                  fa_window: Optional[int] = None,
                  kv_tq3: Optional[bool] = None,
                  lm_head_fix: Optional[bool] = None,
-                 boot_timeout_s: float = 60.0,
+                 boot_timeout_s: float = 180.0,
                  boot_vram_mib: int = 18000):
         """Spawn the patched dflash daemon as a subprocess.
 
@@ -82,21 +82,90 @@ class DflashClient:
         # Park draft by default; user calls unpark when needed
         self._send("park draft\n")
 
-    def _wait_until_loaded(self, timeout: float = 60.0, vram_mib: int = 18000):
+    def _wait_until_loaded(self, timeout: float = 180.0, vram_mib: int = 18000):
         boot = time.time()
+        daemon_pid = self.proc.pid if self.proc else None
         while time.time() - boot < timeout:
             time.sleep(1)
-            try:
-                vram = int(subprocess.check_output(
-                    ["nvidia-smi", "--query-gpu=memory.used",
-                     "--format=csv,noheader,nounits"]).decode().splitlines()[0])
-                if vram > vram_mib:
-                    return
-            except Exception:
-                pass
+            vram = self._read_gpu_vram_mib()
+            if vram is not None and vram > vram_mib:
+                return
+            # On UMA architectures (Strix Halo iGPU gfx1151 etc.), the
+            # static "VRAM" buffer is small (~8 GiB BIOS-set) and most of
+            # the daemon's 17 GiB target allocation lands in HMM-mapped
+            # host memory, invisible to rocm-smi. Fall back to checking
+            # the daemon process RSS — UMA allocations show up there.
+            rss = self._read_daemon_rss_mib(daemon_pid) if daemon_pid else None
+            if rss is not None and rss > vram_mib:
+                return
         raise RuntimeError(
             f"dflash daemon failed to load target weights within {timeout:.0f}s "
-            f"(expected VRAM > {vram_mib} MiB). Check the daemon's stderr.")
+            f"(expected VRAM or daemon RSS > {vram_mib} MiB). "
+            f"Check the daemon's stderr.")
+
+    @staticmethod
+    def _read_daemon_rss_mib(pid: int) -> Optional[int]:
+        """Return resident-set size (MiB) of the daemon process.
+
+        Used as a UMA fallback: on Strix Halo gfx1151 (and similar HMM
+        systems) the daemon's weight allocations live in host memory,
+        not in rocm-smi's static VRAM buffer."""
+        try:
+            with open(f"/proc/{pid}/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        # Format: "VmRSS:  17430964 kB"
+                        return int(parts[1]) // 1024
+        except (FileNotFoundError, OSError, ValueError, IndexError):
+            return None
+        return None
+
+    @staticmethod
+    def _read_gpu_vram_mib() -> Optional[int]:
+        """Return max used VRAM (MiB) across visible GPUs, CUDA or HIP.
+
+        Tries ``nvidia-smi`` first; on HIP/ROCm hosts falls back to
+        ``rocm-smi --showmeminfo vram --json``. Returns the max across
+        all enumerated cards so the boot probe works regardless of which
+        card the daemon bound to. Returns ``None`` if neither tool is
+        available or both produced unparseable output."""
+        import json as _json
+        # CUDA path
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.used",
+                 "--format=csv,noheader,nounits"],
+                stderr=subprocess.DEVNULL).decode()
+            return max(int(line.strip()) for line in out.splitlines() if line.strip())
+        except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+            pass
+        # ROCm path. `rocm-smi` may not be on $PATH on ROCm installs that
+        # don't source /etc/profile.d/rocm.sh in non-login shells — fall back
+        # to the canonical install location.
+        import shutil as _shutil
+        rocm_smi = _shutil.which("rocm-smi") or (
+            "/opt/rocm/bin/rocm-smi" if os.path.exists("/opt/rocm/bin/rocm-smi") else None)
+        if rocm_smi is None:
+            return None
+        try:
+            out = subprocess.check_output(
+                [rocm_smi, "--showmeminfo", "vram", "--json"],
+                stderr=subprocess.DEVNULL).decode()
+            data = _json.loads(out)
+            used_bytes_per_card = []
+            for card in data.values():
+                if not isinstance(card, dict):
+                    continue
+                used = card.get("VRAM Total Used Memory (B)")
+                if used is not None:
+                    used_bytes_per_card.append(int(used))
+            if used_bytes_per_card:
+                return max(used_bytes_per_card) // (1024 * 1024)
+            return None
+        except (subprocess.CalledProcessError, FileNotFoundError, ValueError,
+                KeyError, _json.JSONDecodeError):
+            return None
 
     def _send(self, cmd: str):
         self.proc.stdin.write(cmd.encode())
